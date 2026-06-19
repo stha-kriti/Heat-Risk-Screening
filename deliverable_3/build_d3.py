@@ -226,6 +226,133 @@ for col in ['is_hotspot_absolute', 'is_local_hotspot']:
     assert 0.20 <= risk[col].mean() <= 0.30, f'{col} rate off'
 """)
 
+# ---- Section 3.2 ------------------------------------------------------
+md(r"""
+### 3.2 Station context features
+
+A station's heat is driven by where it sits. We attach each station's
+coordinates and sensor height from the metadata tables (normalising ids to NFC
+again so umlaut stations match), then engineer features that describe a
+station's position. All of these come only from geography and metadata, never
+from the temperature record, so they cannot leak the answer into the model.
+""")
+
+code(r'''
+station_meta = pd.concat(
+    [pd.read_csv(p, sep='\t') for p in sorted(META_DIR.glob('*/station_metadata_*.tsv'))],
+    ignore_index=True,
+)
+station_meta['station_id'] = station_meta['station_id'].map(
+    lambda s: unicodedata.normalize('NFC', str(s))
+)
+
+def parse_height(v):
+    """'4 m' -> 4.0 ; '2-3 m' -> 2.5 ; 2.0 -> 2.0 ; junk -> NaN"""
+    if pd.isna(v): return np.nan
+    s = str(v).lower().replace('m', '').strip()
+    if '-' in s:
+        a, b = s.split('-', 1)
+        try: return (float(a) + float(b)) / 2
+        except ValueError: return np.nan
+    try: return float(s)
+    except ValueError: return np.nan
+
+station_meta['sensor_height_parsed'] = station_meta['sensor_height_m'].apply(parse_height)
+
+meta_cols = ['station_id', 'latitude', 'longitude', 'sensor_height_parsed']
+if 'altitude_m' in station_meta.columns:
+    meta_cols.append('altitude_m')
+df = risk.merge(station_meta[meta_cols], on='station_id', how='left')
+if 'altitude_m' not in df.columns:
+    df['altitude_m'] = np.nan
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = np.radians(lat2 - lat1); dlon = np.radians(lon2 - lon1)
+    a = (np.sin(dlat/2)**2
+         + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon/2)**2)
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+cent = (df.groupby('city', observed=True)[['latitude', 'longitude']]
+          .mean().rename(columns={'latitude': 'clat', 'longitude': 'clon'}))
+df = df.merge(cent, on='city')
+df['distance_to_centroid'] = haversine_km(df.latitude, df.longitude, df.clat, df.clon)
+df['city'] = df['city'].astype(str)
+
+assert df[['latitude', 'longitude']].notna().all().all(), \
+    'some stations have no coordinates -> station_id mismatch with metadata'
+print(f'All {len(df)} stations matched metadata coordinates.')
+''')
+
+md(r"""
+**New spatial features (Deliverable 3).** Distance to the city centre is a coarse
+position signal. We add three richer ones, all derived from the coordinates we
+already hold:
+
+- **Local station density** counts how many other stations lie within 1 km. A
+  dense cluster of sensors usually marks a built-up core, a proxy for the kind of
+  place that traps heat.
+- **Neighbourhood heat (kNN p95)** is the average `p95` of the five nearest
+  *other* stations. It asks whether a station sits in a hot pocket. Because this
+  feature is built from temperatures, using it carelessly would leak the answer,
+  so when we validate we recompute it inside each training fold (Section 6). The
+  column built here is for exploration and the full-data view only.
+- **Direction from the centre** (the compass bearing, split into its sine and
+  cosine) lets the model learn that, say, the south side of a city runs hotter,
+  which plain distance cannot express.
+
+We also keep **elevation** where the metadata provides it; it is populated for
+only a few cities, so it acts as a city-specific signal rather than a universal
+one.
+""")
+
+code(r"""
+coords = df[['latitude', 'longitude']].to_numpy()
+n = len(df)
+
+# pairwise great-circle distances (n is small, ~375, so a dense matrix is fine)
+dist_km = np.zeros((n, n))
+for i in range(n):
+    dist_km[i] = haversine_km(coords[i, 0], coords[i, 1], coords[:, 0], coords[:, 1])
+
+# Local station density: other stations within 1 km (exclude self on the diagonal)
+within_1km = (dist_km <= 1.0)
+np.fill_diagonal(within_1km, False)
+df['station_density_1km'] = within_1km.sum(axis=1)
+
+# kNN-neighbour p95 (k=5 nearest OTHER stations), full-data version for EDA only
+K = 5
+p95_vals = df['p95'].to_numpy()
+knn_p95 = np.empty(n)
+for i in range(n):
+    order = np.argsort(dist_km[i])
+    order = order[order != i][:K]
+    knn_p95[i] = p95_vals[order].mean()
+df['knn_p95_k5'] = knn_p95
+
+# Direction from the city centroid, as sine/cosine of the bearing
+dlon = np.radians(df['longitude'] - df['clon'])
+lat1 = np.radians(df['clat']); lat2 = np.radians(df['latitude'])
+x = np.sin(dlon) * np.cos(lat2)
+y = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
+bearing = np.arctan2(x, y)
+df['bearing_sin'] = np.sin(bearing)
+df['bearing_cos'] = np.cos(bearing)
+
+NUM_FEATURES_BASE = ['latitude', 'longitude', 'distance_to_centroid', 'sensor_height_parsed']
+NUM_FEATURES_SPATIAL = ['station_density_1km', 'bearing_sin', 'bearing_cos', 'altitude_m']
+NUM_FEATURES = NUM_FEATURES_BASE + NUM_FEATURES_SPATIAL
+CAT_FEATURES = ['city']
+FEATURES = NUM_FEATURES + CAT_FEATURES
+
+print('New spatial features built. Summary:')
+print(df[['station_density_1km', 'knn_p95_k5', 'bearing_sin', 'bearing_cos']].describe().round(2))
+print('\naltitude_m non-missing by city:')
+print(df.groupby('city')['altitude_m'].apply(lambda s: s.notna().sum()).to_string())
+assert df['station_density_1km'].min() >= 0
+assert df[['bearing_sin', 'bearing_cos']].abs().max().max() <= 1.0 + 1e-9
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
