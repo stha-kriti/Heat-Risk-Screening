@@ -72,6 +72,90 @@ print('Libraries loaded.')
 print(f'pandas {pd.__version__}, numpy {np.__version__}, sklearn loaded')
 """)
 
+# ---- Section 1 (stub; full prose filled in Task 12) -------------------
+md(r"""
+## 1. Question and motivation
+
+`fill after running` — elaborate motivation written in Task 12.
+""")
+
+# ---- Section 2 --------------------------------------------------------
+md(r"""
+## 2. The data
+
+The dataset is **FAIRUrbTemp**, a curated collection of urban air-temperature
+measurements from European cities. Each city has a set of fixed measurement
+stations, and each station records hourly **air temperature** (`ta`) in degrees
+Celsius. Air temperature is the only measured variable; everything else we use
+is station context (where the station is, how high its sensor sits).
+
+The files are stored in **SEF (Station Exchange Format)**: a 12-line header
+with station identity and units, then a tab-separated table whose key column is
+`Value` (the temperature) alongside `Year, Month, Day, Hour, Minute`. Missing
+readings appear either as the literal text `NA` or as the sentinel `-999`; we
+fold both into proper missing values so they never pollute a temperature
+average. Our **unit of analysis is the station**: every row of the modeling
+table we build later is one station.
+""")
+
+md(r"""
+### 2.1 Load the hourly records
+
+We parse every station file into one long table. Two details matter for
+correctness. First, a station's id is the filename stem before `_AirTemp_`,
+which keeps compound ids such as `AWEL_Blumenfeld` intact. Second, we normalise
+ids to Unicode NFC so that stations with umlauts (for example Basel's
+`Münsterplatz`) match the metadata files later; macOS stores the filenames in a
+different normalisation (NFD) than the metadata tables (NFC), and without this
+step those stations would silently fail to merge.
+""")
+
+code(r'''
+ARCHIVE = Path('../archive')
+HOURLY_DIR = ARCHIVE / 'data' / 'hourly'
+META_DIR   = ARCHIVE / 'data' / 'metadata'
+CACHE_DIR  = Path('cache'); CACHE_DIR.mkdir(exist_ok=True)
+HOURLY_PARQUET = CACHE_DIR / 'hourly_long.parquet'
+
+assert HOURLY_DIR.exists(), f'Dataset not found at {HOURLY_DIR.resolve()}'
+
+def parse_sef_file(path: Path) -> pd.DataFrame:
+    """Parse one FAIRUrbTemp SEF TSV into long format (city, station_id, datetime, ta).
+
+    station_id is the filename stem before '_AirTemp_' (handles 'D2195' and
+    'AWEL_Blumenfeld'), Unicode-normalized to NFC so umlaut station names match
+    the metadata TSVs. '-999' is a missing-value sentinel folded into NA.
+    """
+    df = pd.read_csv(
+        path, sep='\t', skiprows=12, na_values=['NA', '-999', '-999.0'],
+        dtype={'Year':'Int64','Month':'Int64','Day':'Int64','Hour':'Int64','Minute':'Int64'},
+        low_memory=False,
+    )
+    parts = df[['Year','Month','Day','Hour','Minute']].rename(columns=str.lower)
+    return pd.DataFrame({
+        'city': path.parent.name,
+        'station_id': unicodedata.normalize('NFC', path.stem.split('_AirTemp_')[0]),
+        'datetime': pd.to_datetime(parts),
+        'ta': pd.to_numeric(df['Value'], errors='coerce'),
+    })
+
+if HOURLY_PARQUET.exists():
+    print(f'Loading cached parquet {HOURLY_PARQUET} ...')
+    hourly = pd.read_parquet(HOURLY_PARQUET)
+else:
+    print('Parsing SEF files (first run, ~1-2 min) ...')
+    files = [f for c in sorted(HOURLY_DIR.iterdir()) if c.is_dir()
+             for f in sorted(c.glob('*.tsv'))]
+    hourly = pd.concat([parse_sef_file(f) for f in files], ignore_index=True)
+    hourly['city'] = hourly['city'].astype('category')
+    hourly['station_id'] = hourly['station_id'].astype('category')
+    hourly.to_parquet(HOURLY_PARQUET, index=False)
+    print(f'Saved {HOURLY_PARQUET} ({HOURLY_PARQUET.stat().st_size/1e6:.1f} MB)')
+
+print(f'Loaded {len(hourly):,} rows, {hourly.station_id.nunique()} stations, '
+      f'{hourly.city.nunique()} cities')
+''')
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
