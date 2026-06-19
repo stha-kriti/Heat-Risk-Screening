@@ -353,6 +353,82 @@ assert df['station_density_1km'].min() >= 0
 assert df[['bearing_sin', 'bearing_cos']].abs().max().max() <= 1.0 + 1e-9
 """)
 
+# ---- Section 3.3 ------------------------------------------------------
+md(r"""
+### 3.3 A leak-free preprocessing pipeline
+
+Everything the model learns from the data must be learned on the training rows
+only, never the rows we test on. We wrap preprocessing in a scikit-learn
+`Pipeline` so that during cross-validation each step is fit on the training fold
+and merely applied to the held-out fold. The numeric features are median-imputed
+(the parsed sensor height and elevation have gaps) and standardised; the city is
+left out of the model as a predictor because the within-city target already has
+the city removed, and feeding the city back in would be circular. We keep `city`
+only as a grouping key for the cross-city test in Section 6.
+
+The neighbourhood-heat feature needs special care: its value for a station
+depends on other stations' temperatures, so if a test station's neighbours
+include training stations we must compute it using training neighbours only. We
+implement it as a transformer that stores the training coordinates and p95 when
+it is fit, and computes neighbour averages for any rows it later transforms.
+""")
+
+code(r'''
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class KNNNeighbourP95(BaseEstimator, TransformerMixin):
+    """Append mean p95 of the k nearest TRAINING stations (leak-free).
+
+    Expects input columns ['latitude','longitude','p95']; outputs one column.
+    On fit it memorises training coords+p95; on transform it looks up neighbours
+    among the training stations only."""
+    def __init__(self, k=5):
+        self.k = k
+    def fit(self, X, y=None):
+        A = np.asarray(X, dtype=float)
+        self.train_lat_, self.train_lon_, self.train_p95_ = A[:, 0], A[:, 1], A[:, 2]
+        return self
+    def transform(self, X):
+        A = np.asarray(X, dtype=float)
+        out = np.empty(len(A))
+        for i in range(len(A)):
+            d = haversine_km(A[i, 0], A[i, 1], self.train_lat_, self.train_lon_)
+            order = np.argsort(d)
+            # drop exact-self matches (distance 0) so a train row uses its neighbours
+            order = order[d[order] > 1e-9][:self.k]
+            out[i] = self.train_p95_[order].mean()
+        return out.reshape(-1, 1)
+
+def make_pipeline(classifier, add_knn=False):
+    """Leak-free ColumnTransformer (+ optional kNN p95) + classifier."""
+    transformers = [
+        ('num', Pipeline([('impute', SimpleImputer(strategy='median')),
+                          ('scale', StandardScaler())]), NUM_FEATURES),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), CAT_FEATURES),
+    ]
+    if add_knn:
+        transformers.append(('knn', Pipeline([
+            ('nbr', KNNNeighbourP95(k=5)),
+            ('impute', SimpleImputer(strategy='median')),
+            ('scale', StandardScaler()),
+        ]), ['latitude', 'longitude', 'p95']))
+    pre = ColumnTransformer(transformers)
+    return Pipeline([('pre', pre), ('clf', classifier)])
+
+# Feature matrices. X carries p95 ONLY so the kNN transformer can read it; the
+# raw p95 column is never exposed to the numeric block (NUM_FEATURES excludes it).
+X = df[FEATURES + ['p95']].copy()
+y_abs = df['is_hotspot_absolute'].copy()
+y_loc = df['is_local_hotspot'].copy()
+groups = df['city'].to_numpy()
+
+# smoke test (not evaluation)
+_smoke = make_pipeline(LogisticRegression(max_iter=1000, random_state=RANDOM_STATE), add_knn=True)
+_smoke.fit(X, y_abs)
+assert _smoke.predict_proba(X).shape == (len(X), 2)
+print('Pipeline smoke test OK (with leak-free kNN p95 feature).')
+''')
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
