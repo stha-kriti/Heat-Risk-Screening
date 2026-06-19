@@ -263,7 +263,11 @@ A station's heat is driven by where it sits. We attach each station's
 coordinates and sensor height from the metadata tables (normalising ids to NFC
 again so umlaut stations match), then engineer features that describe a
 station's position. All of these come only from geography and metadata, never
-from the temperature record, so they cannot leak the answer into the model.
+from the temperature record, so they cannot leak the answer into the model. The
+city centroid that anchors distance and direction is computed once over all
+stations rather than refit per fold. It uses only coordinates and no
+temperature, so it carries no information about the target and its effect on
+validation is negligible.
 """)
 
 code(r'''
@@ -767,18 +771,26 @@ for tr, te in gkf.split(X, y_abs, groups):
                  'n_positive': int(yt.sum()), 'ROC-AUC': auc})
 transfer = pd.DataFrame(rows).sort_values('n_stations', ascending=False)
 transfer_mean = transfer['ROC-AUC'].mean()
+reliable = transfer[transfer['n_positive'] >= 5]
+transfer_mean_reliable = reliable['ROC-AUC'].mean()
 print(transfer.round(3).to_string(index=False))
-print(f'\nMean leave-one-city-out ROC-AUC: {transfer_mean:.3f}')
-print(f'(Compare to mixed-fold absolute RF ROC-AUC computed in Section 6.1.)')
+print(f'\nMean over all scored folds: {transfer_mean:.3f}')
+print(f"Mean over folds with >=5 positives ({', '.join(reliable.held_out_city)}): "
+      f'{transfer_mean_reliable:.3f}')
+print('(Compare to the mixed-fold absolute RF ROC-AUC of about 0.70 in Section 6.1.)')
 """)
 
 md(r"""
 **What the transfer test shows.** The mixed-fold score of about 0.70 does not
-survive when a whole city is held out. The mean leave-one-city-out ROC-AUC falls
-to about 0.39, at or below chance. The three cities with enough hotspots to
-score tell the same story. Zurich reaches 0.564, Basel 0.420, and Bern 0.463.
-Birmingham and Amsterdam have no absolute hotspots at all, so they cannot be
-scored. The reason is instructive. Much of the absolute model's skill comes from
+survive when a whole city is held out. Three cities have enough hotspots to give
+a meaningful score, and all three land near or below chance. Zurich reaches
+0.564, Basel 0.420, and Bern 0.463, for an average of about 0.48. The other
+three folds cannot be read. Birmingham and Amsterdam have no absolute hotspots
+at all, so they produce no score, and Berlin has a single hotspot, which makes
+its 0.111 meaningless. Averaging every scored fold gives about 0.39, but that
+number is dragged down by the single-positive Berlin fold, so the honest read is
+the 0.48 across the three substantive cities. Either way the message is the
+same. The reason is instructive. Much of the absolute model's skill comes from
 learning each city's own climate level. When a city is entirely new, that anchor
 is gone, and the model cannot place it on the temperature scale. So the screen
 works among cities it has already seen. It does not yet transfer to a city with
