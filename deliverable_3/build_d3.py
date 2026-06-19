@@ -729,6 +729,38 @@ print(f'\nMean leave-one-city-out ROC-AUC: {transfer_mean:.3f}')
 print(f'(Compare to mixed-fold absolute RF ROC-AUC computed in Section 6.1.)')
 """)
 
+# ---- Section 6.5 ------------------------------------------------------
+md(r"""
+### 6.5 Would more data or better features help more?
+
+A learning curve trains the model on increasing fractions of the data and plots
+the cross-validated score. If the validation score is still climbing at the full
+sample, more stations would help. If the two curves have met and flattened at a
+modest level, the model has learned what it can from these features and the limit
+is the features themselves — more rows would not help, but better inputs (land
+cover, density) would. This diagnosis is the evidence behind our recommendation
+in Section 8.
+""")
+
+code(r"""
+lc_est = make_pipeline(RandomForestClassifier(class_weight='balanced', random_state=RANDOM_STATE,
+                                              n_jobs=-1,
+                                              **{k.replace('clf__',''):v for k,v in rf.best_params_.items()}),
+                       add_knn=True)
+sizes, train_scores, val_scores = learning_curve(
+    lc_est, X, y_abs, cv=StratifiedKFold(5, shuffle=True, random_state=RANDOM_STATE),
+    scoring='roc_auc', train_sizes=np.linspace(0.2, 1.0, 6), n_jobs=-1,
+)
+fig, ax = plt.subplots(figsize=(9, 5))
+ax.plot(sizes, train_scores.mean(1), 'o-', label='Training ROC-AUC')
+ax.plot(sizes, val_scores.mean(1), 'o-', label='Cross-validated ROC-AUC')
+ax.fill_between(sizes, val_scores.mean(1)-val_scores.std(1), val_scores.mean(1)+val_scores.std(1), alpha=0.15)
+ax.set_xlabel('Number of training stations'); ax.set_ylabel('ROC-AUC')
+ax.set_title('Learning curve — working model (absolute target)')
+ax.legend(); plt.tight_layout(); plt.show()
+print(f'Train vs CV ROC-AUC at full size: {train_scores.mean(1)[-1]:.3f} vs {val_scores.mean(1)[-1]:.3f}')
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
