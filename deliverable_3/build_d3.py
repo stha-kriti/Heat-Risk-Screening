@@ -605,6 +605,93 @@ print(f'Within-city RF ROC-AUC (enriched): {loc_rf:.3f}')
 assert abs_rf > 0.60, 'absolute model lost its skill — investigate'
 """)
 
+# ---- Section 6.2 ------------------------------------------------------
+md(r"""
+### 6.2 ROC and precision-recall curves (working model)
+
+We focus the operating-point analysis on the model that actually has skill: the
+absolute-target RandomForest with the enriched features. The ROC curve shows the
+trade-off between catching true hotspots and raising false alarms across all
+thresholds; the precision-recall curve is the more honest view here because
+hotspots are the minority class.
+""")
+
+code(r"""
+fpr, tpr, _ = roc_curve(y_abs, p_best)
+prec, rec, _ = precision_recall_curve(y_abs, p_best)
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+axes[0].plot(fpr, tpr, label=f'AUC = {roc_auc_score(y_abs, p_best):.3f}')
+axes[0].plot([0, 1], [0, 1], '--', color='grey')
+axes[0].set_xlabel('False positive rate'); axes[0].set_ylabel('True positive rate')
+axes[0].set_title('ROC — working model (absolute, enriched)'); axes[0].legend()
+axes[1].plot(rec, prec, label=f'PR-AUC = {average_precision_score(y_abs, p_best):.3f}')
+axes[1].axhline(y_abs.mean(), ls='--', color='grey', label=f'baseline = {y_abs.mean():.2f}')
+axes[1].set_xlabel('Recall'); axes[1].set_ylabel('Precision')
+axes[1].set_title('Precision-Recall — working model'); axes[1].legend()
+plt.tight_layout(); plt.show()
+""")
+
+# ---- Section 6.3 ------------------------------------------------------
+md(r"""
+### 6.3 Choosing the screening threshold
+
+The default 0.5 cut-off is rarely the right screening decision. Missing a real
+hotspot (a false negative) means a genuinely hot area goes unprotected, which we
+treat as more costly than a false alarm (wasting a site visit). We weight a miss
+three times a false alarm and pick the threshold that minimises the total cost.
+This makes the screening posture explicit rather than an accident of the default.
+""")
+
+code(r"""
+COST_FN, COST_FP = 3, 1
+def metrics_at(yt, p, thr):
+    yh = (p >= thr).astype(int)
+    tn, fp, fn, tp = confusion_matrix(yt, yh).ravel()
+    return {'thr': thr, 'precision': precision_score(yt, yh, zero_division=0),
+            'recall': recall_score(yt, yh, zero_division=0),
+            'f1': f1_score(yt, yh, zero_division=0),
+            'cost': COST_FN * fn + COST_FP * fp}
+grid = np.linspace(0.05, 0.95, 91)
+sweep = pd.DataFrame([metrics_at(y_abs, p_best, t) for t in grid])
+t_star = float(sweep.loc[sweep['cost'].idxmin(), 'thr'])
+
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.plot(sweep['thr'], sweep['precision'], label='Precision')
+ax.plot(sweep['thr'], sweep['recall'], label='Recall')
+ax.plot(sweep['thr'], sweep['f1'], label='F1')
+ax.axvline(t_star, ls='--', color='red', label=f'chosen threshold = {t_star:.2f}')
+ax.set_xlabel('Decision threshold (predicted probability)')
+ax.set_ylabel('Score'); ax.set_title('Threshold sweep — chosen at minimum expected cost (FN:FP = 3:1)')
+ax.legend(); plt.tight_layout(); plt.show()
+print(f'Chosen threshold: {t_star:.2f}')
+print(pd.DataFrame([metrics_at(y_abs, p_best, t_star)]).round(3).to_string(index=False))
+""")
+
+md(r"""
+At the chosen threshold we inspect the stations the model gets wrong. If the
+false negatives and false positives share traits — sitting at the city edge, an
+unusual sensor height, one particular city — that tells us where the screen is
+weakest and what a human reviewer should double-check.
+""")
+
+code(r"""
+yhat_star = (p_best >= t_star).astype(int)
+ConfusionMatrixDisplay(confusion_matrix(y_abs, yhat_star),
+                       display_labels=['not hotspot', 'hotspot']).plot(cmap='Blues')
+plt.title(f'Confusion matrix — working model at threshold {t_star:.2f}')
+plt.tight_layout(); plt.show()
+
+err = df.copy()
+err['y_true'] = y_abs.to_numpy(); err['y_pred'] = yhat_star; err['p_hotspot'] = p_best
+wrong = err[err['y_true'] != err['y_pred']]
+show = (wrong[['city', 'p95', 'distance_to_centroid', 'sensor_height_parsed', 'p_hotspot', 'y_true']]
+        .rename(columns={'p95': 'p95 (degC)', 'distance_to_centroid': 'distance to centroid (km)',
+                         'sensor_height_parsed': 'sensor height (m)', 'p_hotspot': 'P(hotspot)'}))
+print(f'{len(wrong)} misclassified stations at threshold {t_star:.2f}:')
+print(show.round(2).to_string(index=False))
+print('\nMisclassifications by city:'); print(wrong['city'].value_counts().to_string())
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
