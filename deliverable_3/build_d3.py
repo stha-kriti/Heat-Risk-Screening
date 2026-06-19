@@ -76,7 +76,36 @@ print(f'pandas {pd.__version__}, numpy {np.__version__}, sklearn loaded')
 md(r"""
 ## 1. Question and motivation
 
-`fill after running` — elaborate motivation written in Task 12.
+Cities are getting hotter, and the heat is not spread evenly. Within a single
+city some streets and squares run several degrees warmer than others. Those hot
+spots carry real health risks. Prolonged heat causes heat stress and heat
+stroke, and it raises summer deaths, above all among the elderly, young
+children, and people with heart or lung conditions. A person's exposure depends
+heavily on where they live and spend the day. Knowing which locations run
+hottest is therefore useful public-health information.
+
+This project builds a screening tool for that question. A city has a limited
+budget for cooling measures such as shade, trees, and water features. It cannot
+treat every location, so it needs a way to rank locations by heat and decide
+where to look first. That is a screening problem. We want a method that flags
+the hottest measurement stations so a planner can shortlist them for closer
+study.
+
+We measure a station's heat with the 95th percentile of its hourly summer air
+temperature, written p95. This captures how hot a station gets during its
+hottest hours without over-reacting to a single freak reading. We then study
+heat risk through two lenses. The absolute lens ranks stations across all
+cities, so it is mostly about which city is warmest. The within-city lens ranks
+stations inside their own city, so it isolates microclimate, the local
+differences that planning can actually change. A planner needs both. The
+absolute view says which cities run hottest. The within-city view says where
+the local hot spots sit inside a given city.
+
+The data covers 375 stations across six European cities (Zurich, Basel, Bern,
+Birmingham, Amsterdam, and Berlin). Our success criterion is an honest and
+useful screen, not a high accuracy score. We would rather report a modest result
+we can trust, with its uncertainty stated plainly, than a flattering number we
+cannot defend.
 """)
 
 # ---- Section 2 --------------------------------------------------------
@@ -605,6 +634,20 @@ print(f'Within-city RF ROC-AUC (enriched): {loc_rf:.3f}')
 assert abs_rf > 0.60, 'absolute model lost its skill — investigate'
 """)
 
+md(r"""
+**What the table shows.** Read it as two stories. The absolute target is
+predictable. The RandomForest reaches a ROC-AUC of 0.698 with the enriched
+features, well above the 0.52 of the stratified dummy. The within-city target
+is not. The same model reaches only 0.526, close to the no-skill line of 0.5.
+The new spatial features help a little on both targets. The absolute score rises
+from 0.682 to 0.698, and the within-city score rises from 0.503 to 0.526. The
+lift is real but small, and it is not enough to make the within-city model
+useful. The contrast that frames this project survives. From the geography we
+have, between-city heat is predictable and within-city microclimate is not. The
+features that would close that gap, such as land cover and building density, are
+not in this dataset.
+""")
+
 # ---- Section 6.2 ------------------------------------------------------
 md(r"""
 ### 6.2 ROC and precision-recall curves (working model)
@@ -729,6 +772,20 @@ print(f'\nMean leave-one-city-out ROC-AUC: {transfer_mean:.3f}')
 print(f'(Compare to mixed-fold absolute RF ROC-AUC computed in Section 6.1.)')
 """)
 
+md(r"""
+**What the transfer test shows.** The mixed-fold score of about 0.70 does not
+survive when a whole city is held out. The mean leave-one-city-out ROC-AUC falls
+to about 0.39, at or below chance. The three cities with enough hotspots to
+score tell the same story. Zurich reaches 0.564, Basel 0.420, and Bern 0.463.
+Birmingham and Amsterdam have no absolute hotspots at all, so they cannot be
+scored. The reason is instructive. Much of the absolute model's skill comes from
+learning each city's own climate level. When a city is entirely new, that anchor
+is gone, and the model cannot place it on the temperature scale. So the screen
+works among cities it has already seen. It does not yet transfer to a city with
+no training data. A tool meant for new cities would need features that carry
+climate information directly, rather than a city label learned from examples.
+""")
+
 # ---- Section 6.5 ------------------------------------------------------
 md(r"""
 ### 6.5 Would more data or better features help more?
@@ -758,7 +815,23 @@ ax.fill_between(sizes, val_scores.mean(1)-val_scores.std(1), val_scores.mean(1)+
 ax.set_xlabel('Number of training stations'); ax.set_ylabel('ROC-AUC')
 ax.set_title('Learning curve — working model (absolute target)')
 ax.legend(); plt.tight_layout(); plt.show()
+print('Training stations:', [int(s) for s in sizes])
+print('CV ROC-AUC by size:', [round(v, 3) for v in val_scores.mean(1)])
 print(f'Train vs CV ROC-AUC at full size: {train_scores.mean(1)[-1]:.3f} vs {val_scores.mean(1)[-1]:.3f}')
+""")
+
+md(r"""
+**What the learning curve shows.** The cross-validated score rises steadily as
+we add stations. It climbs from about 0.51 at 60 stations to 0.71 at the full
+300, and it has not flattened. So more stations would still raise performance
+for the absolute model. At the same time the training score stays near 0.94,
+well above the validation score. That gap is variance. The model fits its
+training stations more closely than it generalises. Both signs point the same
+way for the absolute task, and more data would help it. The within-city task is
+different. There the scores sit at chance whatever the feature set, as Section
+6.1 showed, so its limit is the features rather than the sample. The practical
+reading is simple. More stations would sharpen the between-city screen, while
+only richer features would unlock the within-city one.
 """)
 
 # ---- Section 7 (uncertainty) ------------------------------------------
@@ -826,6 +899,59 @@ Honest limitations of the study:
   widens every interval and makes the cross-city scores for small cities noisy.
 - Climate is excluded from the within-city target by design, to isolate
   microclimate; that is a deliberate scope choice, not an oversight.
+""")
+
+# ---- Section 8 (decision) ---------------------------------------------
+md(r"""
+## 8. Decision-oriented interpretation and recommendation
+
+We can now turn the results into advice a city could use. The recommendation has
+two tiers, one for each lens.
+
+First, use the absolute view to decide which cities and areas deserve attention.
+This view is predictable, and its skill is backed by a confidence interval that
+stays above chance. A planner working across several instrumented cities can use
+it to rank locations by heat and focus on the warmest.
+
+Second, inside a chosen city, use the working model to shortlist candidate hot
+spots for a site visit. At the chosen threshold of 0.46 the screen catches about
+66% of the true hotspots, and about 44% of the stations it flags turn out to be
+real hotspots. We set the threshold this way on purpose. Missing a genuinely hot
+area is worse than sending a reviewer to a location that turns out to be
+ordinary, so we accept more false alarms in order to catch more real cases. The
+model is a filter that produces a shortlist, not a final verdict. A human should
+confirm each flagged site.
+
+Two cautions come with the advice. The within-city model is not reliable enough
+to deploy on its own. Its score sits at chance and its confidence interval
+includes 0.5, so it cannot yet separate local hot spots inside a city. And the
+absolute model should be used only in cities where we already have stations,
+because it does not transfer to a city it has never seen.
+
+The most valuable next step is clear from the evidence. The within-city gap is a
+feature problem, not a sample problem, so real land cover, surface sealing, and
+building density would most likely lift the microclimate model. The learning
+curve also shows that more stations would help the absolute screen. The priority
+is richer features first and more stations second.
+""")
+
+# ---- Section 9 (conclusion) -------------------------------------------
+md(r"""
+## 9. Conclusion
+
+We set out to screen urban locations for summer heat risk. We measured each
+station's heat with its summer p95 and studied risk through two lenses, absolute
+and within-city. The central finding is a contrast. Between-city heat is
+predictable from geography, with a ROC-AUC near 0.70, while within-city
+microclimate is not and sits at chance. New spatial features built from the
+coordinates we already hold lifted the scores only slightly and did not change
+this picture. Two checks tell us how far to trust the result. Bootstrap
+confidence intervals separate the two lenses cleanly, and a leave-one-city-out
+test shows the absolute model does not transfer to an unseen city. The honest
+conclusion is that we can screen heat between and within the cities we already
+monitor, but the data we have cannot yet explain microclimate or generalise to
+new cities. The clearest path forward is better features, above all real land
+cover.
 """)
 
 # ---- writer ------------------------------------------------------------
