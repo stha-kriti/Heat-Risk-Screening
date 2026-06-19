@@ -498,6 +498,113 @@ corr = df['knn_p95_k5'].corr(df['p95'])
 print(f'Correlation(neighbour p95, own p95) = {corr:.2f}')
 """)
 
+# ---- Section 5 (methods) ----------------------------------------------
+md(r"""
+## 5. Modeling approach
+
+The screening question is naturally a **classification** problem: given a
+station's location and context, is it a hotspot? Classification also gives us
+the evaluation tools a screening decision needs, above all the ability to tune
+how aggressively we flag stations. We build a ladder of models, from a trivial
+baseline to an interpretable linear model to a flexible non-linear one, and we
+run the whole ladder on **both** targets so the absolute-versus-within-city
+contrast is built into the design rather than added as an afterthought.
+
+We expect only modest skill from geography alone, and that expectation is itself
+a finding: the true drivers of microclimate (land cover, building density,
+surface sealing) are not in this dataset. A simple model that we can explain is
+worth more here than a complex one we cannot.
+""")
+
+code(r"""
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+dummy = make_pipeline(DummyClassifier(strategy='stratified', random_state=RANDOM_STATE), add_knn=True)
+logit = GridSearchCV(
+    make_pipeline(LogisticRegression(class_weight='balanced', max_iter=1000,
+                                     random_state=RANDOM_STATE), add_knn=True),
+    param_grid={'clf__C': [0.1, 1.0, 10.0]},
+    scoring='average_precision', cv=cv, n_jobs=-1,
+)
+rf = GridSearchCV(
+    make_pipeline(RandomForestClassifier(class_weight='balanced',
+                                         random_state=RANDOM_STATE, n_jobs=-1), add_knn=True),
+    param_grid={'clf__n_estimators': [200, 400], 'clf__max_depth': [3, 5, None]},
+    scoring='average_precision', cv=cv, n_jobs=-1,
+)
+logit.fit(X, y_abs); rf.fit(X, y_abs)
+print('LogReg best params:', logit.best_params_)
+print('RF best params:    ', rf.best_params_)
+""")
+
+# ---- Section 6 (validation) -------------------------------------------
+md(r"""
+## 6. Validation and results
+
+We judge every model by cross-validation: the data are split into five folds,
+each fold is predicted by a model trained on the other four, and we score the
+out-of-fold predictions. This simulates predicting stations the model has not
+seen. We report ROC-AUC (ranking quality across all thresholds) and PR-AUC
+(precision against the minority hotspot class, the metric that matters when
+positives are rare). A no-skill model scores about 0.5 on ROC-AUC.
+""")
+
+md(r"""
+### 6.1 The contrast, and whether new features change it
+
+The table below crosses the two targets with the two feature sets. The earlier
+finding was that the **absolute** target is predictable from geography while the
+**within-city** target is not. Here we ask whether the new spatial features
+(neighbourhood heat, density, direction, elevation) move the within-city number
+off chance. Whatever the answer, it is informative: a lift means microclimate is
+partly recoverable from spatial structure; no lift confirms that the missing
+ingredient is data we do not have.
+""")
+
+code(r"""
+def oof(estimator, yt):
+    cv_t = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    return cross_val_predict(estimator, X, yt, cv=cv_t, method='predict_proba')[:, 1]
+
+def pipe_geo(clf):
+    pre = ColumnTransformer([
+        ('num', Pipeline([('impute', SimpleImputer(strategy='median')),
+                          ('scale', StandardScaler())]), NUM_FEATURES_BASE),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), CAT_FEATURES),
+    ])
+    return Pipeline([('pre', pre), ('clf', clf)])
+
+def fresh_models(add_knn):
+    mk = (lambda clf: make_pipeline(clf, add_knn=True)) if add_knn else pipe_geo
+    return {
+        'Dummy (stratified)': mk(DummyClassifier(strategy='stratified', random_state=RANDOM_STATE)),
+        'LogReg (balanced)':  mk(LogisticRegression(class_weight='balanced', max_iter=1000,
+                                                    C=logit.best_params_['clf__C'], random_state=RANDOM_STATE)),
+        'RandomForest':       mk(RandomForestClassifier(class_weight='balanced', random_state=RANDOM_STATE,
+                                                        n_jobs=-1, **{k.replace('clf__',''):v for k,v in rf.best_params_.items()})),
+    }
+
+targets = {'absolute': y_abs, 'within-city': y_loc}
+proba, rows = {}, []
+for fs_name, add_knn in [('geography-only', False), ('enriched', True)]:
+    for tname, yt in targets.items():
+        for mname, est in fresh_models(add_knn).items():
+            p = oof(est, yt)
+            proba[(tname, mname, fs_name)] = p
+            rows.append({'target': tname, 'features': fs_name, 'model': mname,
+                         'ROC-AUC': roc_auc_score(yt, p),
+                         'PR-AUC': average_precision_score(yt, p)})
+contrast = pd.DataFrame(rows).set_index(['target', 'features', 'model']).round(3)
+print(contrast)
+
+p_best = proba[('absolute', 'RandomForest', 'enriched')]
+best_name = 'RandomForest (absolute, enriched)'
+abs_rf = contrast.loc[('absolute', 'enriched', 'RandomForest'), 'ROC-AUC']
+loc_rf = contrast.loc[('within-city', 'enriched', 'RandomForest'), 'ROC-AUC']
+print(f'\nAbsolute RF ROC-AUC (enriched): {abs_rf:.3f}')
+print(f'Within-city RF ROC-AUC (enriched): {loc_rf:.3f}')
+assert abs_rf > 0.60, 'absolute model lost its skill — investigate'
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
