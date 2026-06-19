@@ -156,6 +156,76 @@ print(f'Loaded {len(hourly):,} rows, {hourly.station_id.nunique()} stations, '
       f'{hourly.city.nunique()} cities')
 ''')
 
+# ---- Section 3 --------------------------------------------------------
+md(r"""
+## 3. From raw records to a modeling table
+
+We now turn millions of hourly readings into one row per station with a heat
+measure and the features we will model. Every transformation here is
+reproducible and explained, because the quality of this step decides whether
+the later model means anything.
+""")
+
+md(r"""
+### 3.1 Heat measure and the two definitions of "hotspot"
+
+For each station we summarise its summers (June to August, 2019-2022) with the
+**95th percentile of hourly air temperature** (`p95`). The 95th percentile
+captures how hot a station gets during its hottest hours, while ignoring a
+single freak reading that a plain maximum would over-react to. We keep only
+stations with at least 50% of the possible summer hours, so a sparse station
+cannot produce a noisy percentile.
+
+We then label "hotspots" two different ways, and the contrast between them is
+the analytical heart of this project:
+
+- **Absolute hotspot** — the station's `p95` is in the top quartile across *all*
+  stations in *all* cities. This is dominated by climate: a warm city's stations
+  are hot in absolute terms.
+- **Within-city (local) hotspot** — the station's `p95` is in the top quartile
+  *inside its own city*. This removes the city's background climate and isolates
+  **microclimate**: which spots run hot relative to their neighbours.
+
+A planner needs both. The absolute view says which cities run hottest; the
+within-city view says where the local hotspots sit inside a given city.
+""")
+
+code(r"""
+STUDY_YEARS = [2019, 2020, 2021, 2022]
+SUMMER_MONTHS = [6, 7, 8]
+MAX_OBS = len(STUDY_YEARS) * 92 * 24    # theoretical max summer hours
+MIN_AVAILABILITY = 0.50
+
+m = (hourly['datetime'].dt.year.isin(STUDY_YEARS)
+     & hourly['datetime'].dt.month.isin(SUMMER_MONTHS))
+summer = hourly.loc[m].dropna(subset=['ta']).copy()
+
+n_obs = summer.groupby('station_id', observed=True).size()
+keep = n_obs[n_obs >= MIN_AVAILABILITY * MAX_OBS].index
+summer = summer[summer['station_id'].isin(keep)]
+
+risk = (summer.groupby(['city', 'station_id'], observed=True)['ta']
+        .quantile(0.95).reset_index(name='p95'))
+
+risk['is_hotspot_absolute'] = (risk['p95'] >= risk['p95'].quantile(0.75)).astype(int)
+risk['is_local_hotspot'] = (
+    risk.groupby('city', observed=True)['p95']
+        .transform(lambda s: (s >= s.quantile(0.75)).astype(int))
+)
+
+print(f'Stations after availability filter: {len(risk)} across {risk.city.nunique()} cities')
+print(f'Absolute hotspot rate: {risk.is_hotspot_absolute.mean():.0%}')
+print(f'Local hotspot rate:    {risk.is_local_hotspot.mean():.0%}')
+print('\nAbsolute hotspots by city (expect Zurich-dominated):')
+print(risk[risk.is_hotspot_absolute == 1].city.value_counts().to_string())
+print('\nLocal hotspots by city (expect spread across cities):')
+print(risk[risk.is_local_hotspot == 1].city.value_counts().to_string())
+
+assert 350 <= len(risk) <= 400, f'unexpected station count {len(risk)}'
+for col in ['is_hotspot_absolute', 'is_local_hotspot']:
+    assert 0.20 <= risk[col].mean() <= 0.30, f'{col} rate off'
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
