@@ -429,6 +429,75 @@ assert _smoke.predict_proba(X).shape == (len(X), 2)
 print('Pipeline smoke test OK (with leak-free kNN p95 feature).')
 ''')
 
+# ---- Section 4 (EDA) --------------------------------------------------
+md(r"""
+## 4. Exploratory data analysis
+
+Before modeling we look at the data to understand the patterns the model will
+have to capture, and to motivate the two-target design. Two findings stand out
+and shape the rest of the notebook.
+""")
+
+md(r"""
+### 4.1 Climate dominates the absolute ranking
+
+If we rank stations by raw `p95`, the hottest are concentrated in the warmest
+cities. The boxplot below shows each city's spread of station `p95` values. The
+cities sit at clearly different levels, so an absolute "top quartile" label is
+mostly a statement about which city a station is in.
+""")
+
+code(r"""
+order = df.groupby('city')['p95'].median().sort_values(ascending=False).index
+fig, ax = plt.subplots(figsize=(10, 5))
+sns.boxplot(data=df, x='city', y='p95', order=order, ax=ax)
+ax.set_xlabel('City'); ax.set_ylabel('Summer p95 air temperature (degC)')
+ax.set_title('Station heat (summer p95) by city — cities sit at different climate levels')
+plt.xticks(rotation=20); plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+### 4.2 Microclimate exists within every city
+
+Within a single city, stations still differ by several degrees. That within-city
+spread is the microclimate signal our local-hotspot target tries to predict. The
+plot below shows, for each city, how far its hottest stations sit above its
+coolest, confirming there is a real within-city range to explain.
+""")
+
+code(r"""
+spread = (df.groupby('city')['p95'].agg(['min', 'max'])
+            .assign(range=lambda d: d['max'] - d['min'])
+            .sort_values('range', ascending=False))
+fig, ax = plt.subplots(figsize=(9, 5))
+sns.barplot(x=spread.index, y=spread['range'], ax=ax)
+ax.set_xlabel('City'); ax.set_ylabel('Within-city p95 range (degC)')
+ax.set_title('Hottest minus coolest station within each city — the microclimate range')
+plt.xticks(rotation=20); plt.tight_layout(); plt.show()
+print(spread.round(2).to_string())
+""")
+
+md(r"""
+### 4.3 Do the new spatial features track heat?
+
+A quick check that the engineered features carry signal worth modeling. We plot
+neighbourhood heat (mean p95 of the five nearest stations) against a station's
+own p95; a positive trend means heat is spatially clustered, which is what the
+feature is meant to capture.
+""")
+
+code(r"""
+fig, ax = plt.subplots(figsize=(7, 6))
+sns.scatterplot(data=df, x='knn_p95_k5', y='p95', hue='city', ax=ax, alpha=0.7)
+ax.set_xlabel('Neighbourhood heat: mean p95 of 5 nearest stations (degC)')
+ax.set_ylabel('Station summer p95 (degC)')
+ax.set_title('Heat is spatially clustered: a station resembles its neighbours')
+ax.legend(title='City', fontsize=8, loc='best')
+plt.tight_layout(); plt.show()
+corr = df['knn_p95_k5'].corr(df['p95'])
+print(f'Correlation(neighbour p95, own p95) = {corr:.2f}')
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
