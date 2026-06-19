@@ -692,6 +692,43 @@ print(show.round(2).to_string(index=False))
 print('\nMisclassifications by city:'); print(wrong['city'].value_counts().to_string())
 """)
 
+# ---- Section 6.4 ------------------------------------------------------
+md(r"""
+### 6.4 Can the model transfer to a city it has never seen?
+
+Cross-validation above mixes all six cities into every fold, so the model always
+trains on some stations from each city. A screening tool is more useful if it
+works in a city with no training data at all. We test this with leave-one-city-out
+validation: train on five cities, predict the sixth, and repeat. We score the
+absolute target, the one with real skill. A large drop from the mixed-fold score
+would mean the model leans on city-specific quirks rather than a transferable
+pattern. Two cities (Amsterdam, Berlin) have only ten stations each, so their
+held-out scores are noisy; we report every city and read the pattern, not any
+single number.
+""")
+
+code(r"""
+gkf = GroupKFold(n_splits=df['city'].nunique())
+rows = []
+for tr, te in gkf.split(X, y_abs, groups):
+    held = df.iloc[te]['city'].iloc[0]
+    est = make_pipeline(RandomForestClassifier(class_weight='balanced', random_state=RANDOM_STATE,
+                                               n_jobs=-1,
+                                               **{k.replace('clf__',''):v for k,v in rf.best_params_.items()}),
+                        add_knn=True)
+    est.fit(X.iloc[tr], y_abs.iloc[tr])
+    p = est.predict_proba(X.iloc[te])[:, 1]
+    yt = y_abs.iloc[te]
+    auc = roc_auc_score(yt, p) if yt.nunique() > 1 else np.nan
+    rows.append({'held_out_city': held, 'n_stations': len(te),
+                 'n_positive': int(yt.sum()), 'ROC-AUC': auc})
+transfer = pd.DataFrame(rows).sort_values('n_stations', ascending=False)
+transfer_mean = transfer['ROC-AUC'].mean()
+print(transfer.round(3).to_string(index=False))
+print(f'\nMean leave-one-city-out ROC-AUC: {transfer_mean:.3f}')
+print(f'(Compare to mixed-fold absolute RF ROC-AUC computed in Section 6.1.)')
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
