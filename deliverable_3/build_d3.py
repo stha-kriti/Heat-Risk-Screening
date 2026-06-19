@@ -761,6 +761,73 @@ ax.legend(); plt.tight_layout(); plt.show()
 print(f'Train vs CV ROC-AUC at full size: {train_scores.mean(1)[-1]:.3f} vs {val_scores.mean(1)[-1]:.3f}')
 """)
 
+# ---- Section 7 (uncertainty) ------------------------------------------
+md(r"""
+## 7. Uncertainty and limitations
+
+A single ROC-AUC number hides how much it could shift if we had sampled
+different stations. With only a few hundred stations this matters. We quantify it
+by bootstrapping: we resample the stations with replacement many times, recompute
+the score each time, and report the 2.5th-97.5th percentile range as a 95%
+confidence interval. This lets us say whether the gap between the absolute model
+and the within-city model is real or could be noise.
+""")
+
+code(r"""
+def bootstrap_auc(yt, p, n_boot=2000):
+    yt = np.asarray(yt); p = np.asarray(p); n = len(yt)
+    stats = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        if np.unique(yt[idx]).size < 2:
+            continue
+        stats.append(roc_auc_score(yt[idx], p[idx]))
+    lo, hi = np.percentile(stats, [2.5, 97.5])
+    return np.mean(stats), lo, hi
+
+rows = []
+for tname, yt in [('absolute', y_abs), ('within-city', y_loc)]:
+    p = proba[(tname, 'RandomForest', 'enriched')]
+    mean, lo, hi = bootstrap_auc(yt, p)
+    rows.append({'target': tname, 'ROC-AUC': roc_auc_score(yt, p),
+                 'boot_mean': mean, 'CI_low': lo, 'CI_high': hi})
+ci = pd.DataFrame(rows).round(3)
+print(ci.to_string(index=False))
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.errorbar(ci['ROC-AUC'], ci['target'],
+            xerr=[ci['ROC-AUC']-ci['CI_low'], ci['CI_high']-ci['ROC-AUC']],
+            fmt='o', capsize=6)
+ax.axvline(0.5, ls='--', color='grey', label='no-skill (0.5)')
+ax.set_xlabel('ROC-AUC (95% bootstrap CI)'); ax.set_ylabel('')
+ax.set_title('Absolute vs within-city: point estimate with uncertainty')
+ax.legend(); plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+### 7.1 What this analysis can and cannot say
+
+The confidence intervals frame two kinds of uncertainty. **Epistemic** uncertainty
+is the part we could shrink with more or better data: the wide intervals come
+partly from a small sample, and the modest scores come from features that only
+proxy the real drivers. **Aleatoric** uncertainty is irreducible: a station's
+heat depends on fine-scale surroundings that no amount of coordinates will fully
+capture.
+
+Honest limitations of the study:
+
+- The features are thin. Latitude, longitude, distance, direction, density and
+  sensor height are weak stand-ins for what actually drives microclimate, namely
+  land cover, surface sealing and building density. We name this as the main
+  reason the within-city signal is hard to predict.
+- The within-city label is **relative**. A within-city hotspot in a cool city is
+  not hot in absolute terms, so the two views must be read together.
+- The sample is small (a few hundred stations, two cities with only ten), which
+  widens every interval and makes the cross-city scores for small cities noisy.
+- Climate is excluded from the within-city target by design, to isolate
+  microclimate; that is a deliberate scope choice, not an oversight.
+""")
+
 # ---- writer ------------------------------------------------------------
 def build():
     cells = []
