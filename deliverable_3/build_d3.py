@@ -8,30 +8,24 @@ def code(s): CELLS.append(("code", s.strip("\n")))
 
 # ---- Title -------------------------------------------------------------
 md(r"""
-# Heat-Risk Screening — Deliverable 3 (Final Integrated Notebook)
+# Heat-Risk Screening — Deliverable 3
 
-**Course:** Computational Data Analysis with Python (CDAP), TUM
 **Track 1 — Heat-risk screening** · Kriti Shrestha & Jonas Juchelka
 
-This notebook is the final, standalone synthesis of the project. It runs top to
-bottom from a clean kernel and does not depend on the Deliverable 1 or 2
-notebooks. It carries its own data-loading code and reads the shared dataset
-from `../archive/`.
+In this project, under Track 1, we study urban summer heat exposure across six European cities and build a screening tool that flags the hottest measurement locations. The notebook is structured as follows:
 
-We study urban summer heat exposure across six European cities and build a
-screening tool that flags the hottest measurement locations. The notebook walks
-the full path from the question, through the data and its quality, the analysis
-and its validation, to an honest read of uncertainty and a concrete
-recommendation a city could act on.
+  - State the problem and frame the screening question.
+  - Examine the data and its quality.
+  - Run the analysis and validate it.
+  - Present the uncertainty honestly and give a concrete recommendation a city could act on.
 """)
 
 # ---- Section 0 ---------------------------------------------------------
 md(r"""
 ## 0. Setup
 
-We import the scientific Python stack and scikit-learn, fix a single random
-seed so every result is reproducible, and set a consistent plotting style.
-Nothing here is analysis yet; it just prepares the environment.
+We import the dependencies, fix a single random seed for reproducibility, and
+set a consistent plotting style.
 """)
 
 code(r"""
@@ -103,9 +97,7 @@ the local hot spots sit inside a given city.
 
 The data covers 375 stations across six European cities (Zurich, Basel, Bern,
 Birmingham, Amsterdam, and Berlin). Our success criterion is an honest and
-useful screen, not a high accuracy score. We would rather report a modest result
-we can trust, with its uncertainty stated plainly, than a flattering number we
-cannot defend.
+useful screen, not a high accuracy score.
 """)
 
 # ---- Section 2 --------------------------------------------------------
@@ -130,13 +122,7 @@ table we build later is one station.
 md(r"""
 ### 2.1 Load the hourly records
 
-We parse every station file into one long table. Two details matter for
-correctness. First, a station's id is the filename stem before `_AirTemp_`,
-which keeps compound ids such as `AWEL_Blumenfeld` intact. Second, we normalise
-ids to Unicode NFC so that stations with umlauts (for example Basel's
-`Münsterplatz`) match the metadata files later; macOS stores the filenames in a
-different normalisation (NFD) than the metadata tables (NFC), and without this
-step those stations would silently fail to merge.
+We parse every station file into one long table. Two details matter for correctness. First, a station's id is the filename stem before _AirTemp_, which keeps compound ids such as AWEL_Blumenfeld intact. Second, we normalise ids to Unicode NFC so that stations with umlauts (for example Basel's Münsterplatz) match the metadata files later. The filenames and the metadata tables can arrive in different Unicode normalisations (NFD versus NFC), and without this step those stations would silently fail to merge.
 """)
 
 code(r'''
@@ -190,9 +176,7 @@ md(r"""
 ## 3. From raw records to a modeling table
 
 We now turn millions of hourly readings into one row per station with a heat
-measure and the features we will model. Every transformation here is
-reproducible and explained, because the quality of this step decides whether
-the later model means anything.
+measure and the features we will model. Every transformation is reproducible and documented, since the reliability of the later analysis rests on the quality of this preprocessing.
 """)
 
 md(r"""
@@ -206,7 +190,7 @@ stations with at least 50% of the possible summer hours, so a sparse station
 cannot produce a noisy percentile.
 
 We then label "hotspots" two different ways, and the contrast between them is
-the analytical heart of this project:
+the analytical center of this project:
 
 - **Absolute hotspot** — the station's `p95` is in the top quartile across *all*
   stations in *all* cities. This is dominated by climate: a warm city's stations
@@ -318,7 +302,7 @@ print(f'All {len(df)} stations matched metadata coordinates.')
 ''')
 
 md(r"""
-**New spatial features (Deliverable 3).** Distance to the city centre is a coarse
+**New spatial features.** Distance to the city centre is a coarse
 position signal. We add three richer ones, all derived from the coordinates we
 already hold:
 
@@ -394,7 +378,7 @@ Everything the model learns from the data must be learned on the training rows
 only, never the rows we test on. We wrap preprocessing in a scikit-learn
 `Pipeline` so that during cross-validation each step is fit on the training fold
 and merely applied to the held-out fold. The numeric features are median-imputed
-(the parsed sensor height and elevation have gaps) and standardised; the city is
+(the parsed sensor height and elevation have gaps) and standardised. The city is
 left out of the model as a predictor because the within-city target already has
 the city removed, and feeding the city back in would be circular. We keep `city`
 only as a grouping key for the cross-city test in Section 6.
@@ -544,7 +528,7 @@ run the whole ladder on **both** targets so the absolute-versus-within-city
 contrast is built into the design rather than added as an afterthought.
 
 We expect only modest skill from geography alone, and that expectation is itself
-a finding: the true drivers of microclimate (land cover, building density,
+a finding. The true drivers of microclimate (land cover, building density,
 surface sealing) are not in this dataset. A simple model that we can explain is
 worth more here than a complex one we cannot.
 """)
@@ -582,15 +566,14 @@ positives are rare). A no-skill model scores about 0.5 on ROC-AUC.
 """)
 
 md(r"""
-### 6.1 The contrast, and whether new features change it
+### 6.1 The contrast between the two targets
 
-The table below crosses the two targets with the two feature sets. The earlier
-finding was that the **absolute** target is predictable from geography while the
-**within-city** target is not. Here we ask whether the new spatial features
-(neighbourhood heat, density, direction, elevation) move the within-city number
-off chance. Whatever the answer, it is informative: a lift means microclimate is
-partly recoverable from spatial structure; no lift confirms that the missing
-ingredient is data we do not have.
+The table below crosses the two targets with the two feature sets. It lets us
+compare directly how well geography predicts absolute heat against how well it
+predicts within-city microclimate. We also ask whether the new spatial features
+move the within-city number off chance. The result is informative either way. A
+lift would mean microclimate is partly recoverable from spatial structure. No
+lift would confirm that the missing ingredient is data we do not have.
 """)
 
 code(r"""
@@ -639,7 +622,7 @@ assert abs_rf > 0.60, 'absolute model lost its skill — investigate'
 """)
 
 md(r"""
-**What the table shows.** Read it as two stories. The absolute target is
+**What the table shows.** The absolute target is
 predictable. The RandomForest reaches a ROC-AUC of 0.698 with the enriched
 features, well above the 0.52 of the stratified dummy. The within-city target
 is not. The same model reaches only 0.526, close to the no-skill line of 0.5.
@@ -715,10 +698,7 @@ print(pd.DataFrame([metrics_at(y_abs, p_best, t_star)]).round(3).to_string(index
 """)
 
 md(r"""
-At the chosen threshold we inspect the stations the model gets wrong. If the
-false negatives and false positives share traits — sitting at the city edge, an
-unusual sensor height, one particular city — that tells us where the screen is
-weakest and what a human reviewer should double-check.
+At the chosen threshold we inspect the stations the model gets wrong. If the false negatives and false positives share traits, such as sitting at the city edge, having an unusual sensor height, or clustering in one city, that tells us where the screen is weakest and what a human reviewer should double-check.
 """)
 
 code(r"""
@@ -737,6 +717,26 @@ show = (wrong[['city', 'p95', 'distance_to_centroid', 'sensor_height_parsed', 'p
 print(f'{len(wrong)} misclassified stations at threshold {t_star:.2f}:')
 print(show.round(2).to_string(index=False))
 print('\nMisclassifications by city:'); print(wrong['city'].value_counts().to_string())
+""")
+
+md(r"""
+**What the confusion matrix shows.** At the screening threshold of 0.46 the
+model flags 144 of the 375 stations as likely hotspots. Of the 95 stations that
+are truly in the top quartile, it catches 63 and misses 32, a recall of 66%. Of
+the 144 it flags, 63 turn out to be real, a precision of 44%, so a little under
+half of the shortlist would survive a closer look. The 113 errors split into 81
+false alarms and 32 missed hotspots. That balance is deliberate. Because we
+weighted a missed hotspot three times a false alarm, the model leans toward
+catching more real hotspots at the cost of a longer shortlist, which is the right
+posture for a screen whose flagged sites get a human review anyway.
+
+The errors are not spread evenly. Zurich accounts for 87 of the 113 misclassified
+stations, well above the share its station count alone would suggest. This is
+expected rather than alarming. Zurich contributes 184 of the 375 stations and has
+by far the widest within-city temperature range, so it holds the most borderline
+cases sitting near the decision boundary. The practical reading is that the
+screen is least certain in the largest and most varied city, which is exactly
+where a planner should expect to do the most checking on the ground.
 """)
 
 # ---- Section 6.4 ------------------------------------------------------
@@ -777,7 +777,6 @@ print(transfer.round(3).to_string(index=False))
 print(f'\nMean over all scored folds: {transfer_mean:.3f}')
 print(f"Mean over folds with >=5 positives ({', '.join(reliable.held_out_city)}): "
       f'{transfer_mean_reliable:.3f}')
-print('(Compare to the mixed-fold absolute RF ROC-AUC of about 0.70 in Section 6.1.)')
 """)
 
 md(r"""
@@ -802,13 +801,7 @@ climate information directly, rather than a city label learned from examples.
 md(r"""
 ### 6.5 Would more data or better features help more?
 
-A learning curve trains the model on increasing fractions of the data and plots
-the cross-validated score. If the validation score is still climbing at the full
-sample, more stations would help. If the two curves have met and flattened at a
-modest level, the model has learned what it can from these features and the limit
-is the features themselves — more rows would not help, but better inputs (land
-cover, density) would. This diagnosis is the evidence behind our recommendation
-in Section 8.
+A learning curve trains the model on increasing fractions of the data and plots the cross-validated score. If the validation score is still climbing at the full sample, more stations would help. If the two curves have met and flattened at a modest level, the model has learned what it can from these features. The limit is then the features themselves: more rows would not help, but better inputs such as land cover or density would. This diagnosis is the evidence behind our recommendation in Section 8.
 """)
 
 code(r"""
