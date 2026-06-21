@@ -56,6 +56,7 @@ from sklearn.metrics import (
     confusion_matrix, ConfusionMatrixDisplay,
 )
 
+# One fixed seed everywhere makes every split, model, and bootstrap reproducible.
 RANDOM_STATE = 42
 rng = np.random.default_rng(RANDOM_STATE)
 sns.set_theme(style='whitegrid', context='notebook')
@@ -154,6 +155,7 @@ def parse_sef_file(path: Path) -> pd.DataFrame:
         'ta': pd.to_numeric(df['Value'], errors='coerce'),
     })
 
+# Parse all SEF files once and cache to parquet; reuse the cache on later runs.
 if HOURLY_PARQUET.exists():
     print(f'Loading cached parquet {HOURLY_PARQUET} ...')
     hourly = pd.read_parquet(HOURLY_PARQUET)
@@ -209,18 +211,24 @@ SUMMER_MONTHS = [6, 7, 8]
 MAX_OBS = len(STUDY_YEARS) * 92 * 24    # theoretical max summer hours
 MIN_AVAILABILITY = 0.50
 
+# Restrict to summer (Jun-Aug) of the study years and drop missing readings.
 m = (hourly['datetime'].dt.year.isin(STUDY_YEARS)
      & hourly['datetime'].dt.month.isin(SUMMER_MONTHS))
 summer = hourly.loc[m].dropna(subset=['ta']).copy()
 
+# Keep only stations with >=50% of the possible summer hours so a sparse record
+# cannot produce a noisy percentile.
 n_obs = summer.groupby('station_id', observed=True).size()
 keep = n_obs[n_obs >= MIN_AVAILABILITY * MAX_OBS].index
 summer = summer[summer['station_id'].isin(keep)]
 
+# Heat metric: each station's 95th-percentile summer temperature.
 risk = (summer.groupby(['city', 'station_id'], observed=True)['ta']
         .quantile(0.95).reset_index(name='p95'))
 
+# Absolute target: top quartile across all cities (driven by climate).
 risk['is_hotspot_absolute'] = (risk['p95'] >= risk['p95'].quantile(0.75)).astype(int)
+# Within-city target: top quartile inside each city (microclimate, climate removed).
 risk['is_local_hotspot'] = (
     risk.groupby('city', observed=True)['p95']
         .transform(lambda s: (s >= s.quantile(0.75)).astype(int))
@@ -267,10 +275,12 @@ validation is negligible.
 """)
 
 code(r'''
+# Combine the per-city station metadata tables into one frame.
 station_meta = pd.concat(
     [pd.read_csv(p, sep='\t') for p in sorted(META_DIR.glob('*/station_metadata_*.tsv'))],
     ignore_index=True,
 )
+# NFC-normalise ids so they match the parsed hourly data (see Section 2.1).
 station_meta['station_id'] = station_meta['station_id'].map(
     lambda s: unicodedata.normalize('NFC', str(s))
 )
@@ -288,6 +298,7 @@ def parse_height(v):
 
 station_meta['sensor_height_parsed'] = station_meta['sensor_height_m'].apply(parse_height)
 
+# Attach coordinates, parsed sensor height, and elevation (where present) to each station.
 meta_cols = ['station_id', 'latitude', 'longitude', 'sensor_height_parsed']
 if 'altitude_m' in station_meta.columns:
     meta_cols.append('altitude_m')
@@ -302,6 +313,8 @@ def haversine_km(lat1, lon1, lat2, lon2):
          + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon/2)**2)
     return 2 * R * np.arcsin(np.sqrt(a))
 
+# City centroid (mean lat/lon) anchors the distance feature: how far a station
+# sits from its city centre.
 cent = (df.groupby('city', observed=True)[['latitude', 'longitude']]
           .mean().rename(columns={'latitude': 'clat', 'longitude': 'clon'}))
 df = df.merge(cent, on='city')
@@ -477,6 +490,7 @@ mostly a statement about which city a station is in.
 """)
 
 code(r"""
+# Boxplot of station p95 by city, ordered hottest-first.
 order = df.groupby('city')['p95'].median().sort_values(ascending=False).index
 fig, ax = plt.subplots(figsize=(10, 5))
 sns.boxplot(data=df, x='city', y='p95', order=order, ax=ax)
@@ -495,6 +509,7 @@ coolest, confirming there is a real within-city range to explain.
 """)
 
 code(r"""
+# Within-city p95 range (hottest minus coolest station) per city.
 spread = (df.groupby('city')['p95'].agg(['min', 'max'])
             .assign(range=lambda d: d['max'] - d['min'])
             .sort_values('range', ascending=False))
@@ -516,6 +531,7 @@ feature is meant to capture.
 """)
 
 code(r"""
+# Neighbourhood heat vs own heat: a positive trend means heat is spatially clustered.
 fig, ax = plt.subplots(figsize=(7, 6))
 sns.scatterplot(data=df, x='knn_p95_k5', y='p95', hue='city', ax=ax, alpha=0.7)
 ax.set_xlabel('Neighbourhood heat: mean p95 of 5 nearest stations (degC)')
@@ -557,19 +573,27 @@ the chosen settings are reused for both targets so the comparison stays fair.
 
 code(r"""
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+
+# Baseline: no-skill floor that any real model must beat.
 dummy = make_pipeline(DummyClassifier(strategy='stratified', random_state=RANDOM_STATE), add_knn=True)
+
+# Interpretable model: tune the regularisation strength C by inner cross-validation.
 logit = GridSearchCV(
     make_pipeline(LogisticRegression(class_weight='balanced', max_iter=1000,
                                      random_state=RANDOM_STATE), add_knn=True),
     param_grid={'clf__C': [0.1, 1.0, 10.0]},
     scoring='average_precision', cv=cv, n_jobs=-1,
 )
+
+# Flexible model: tune forest size and depth by inner cross-validation.
 rf = GridSearchCV(
     make_pipeline(RandomForestClassifier(class_weight='balanced',
                                          random_state=RANDOM_STATE, n_jobs=-1), add_knn=True),
     param_grid={'clf__n_estimators': [200, 400], 'clf__max_depth': [3, 5, None]},
     scoring='average_precision', cv=cv, n_jobs=-1,
 )
+
+# Tune once on the absolute target; reuse the chosen settings for both targets.
 logit.fit(X, y_abs); rf.fit(X, y_abs)
 print('LogReg best params:', logit.best_params_)
 print('RF best params:    ', rf.best_params_)
@@ -606,10 +630,12 @@ lift would confirm that the missing ingredient is data we do not have.
 """)
 
 code(r"""
+# Out-of-fold probabilities: each station scored by a model trained on other folds.
 def oof(estimator, yt):
     cv_t = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
     return cross_val_predict(estimator, X, yt, cv=cv_t, method='predict_proba')[:, 1]
 
+# Geography-only pipeline: base features only, no kNN-neighbour-p95 feature.
 def pipe_geo(clf):
     pre = ColumnTransformer([
         ('num', Pipeline([('impute', SimpleImputer(strategy='median')),
@@ -618,6 +644,7 @@ def pipe_geo(clf):
     ])
     return Pipeline([('pre', pre), ('clf', clf)])
 
+# Build fresh, untrained estimators for a feature set (enriched adds the kNN feature).
 def fresh_models(add_knn):
     mk = (lambda clf: make_pipeline(clf, add_knn=True)) if add_knn else pipe_geo
     return {
@@ -630,6 +657,7 @@ def fresh_models(add_knn):
 
 targets = {'absolute': y_abs, 'within-city': y_loc}
 proba, rows = {}, []
+# Cross every feature set x target x model; collect out-of-fold ROC-AUC and PR-AUC.
 for fs_name, add_knn in [('geography-only', False), ('enriched', True)]:
     for tname, yt in targets.items():
         for mname, est in fresh_models(add_knn).items():
@@ -676,6 +704,7 @@ hotspots are the minority class.
 """)
 
 code(r"""
+# ROC and precision-recall curves for the working model (absolute, enriched).
 fpr, tpr, _ = roc_curve(y_abs, p_best)
 prec, rec, _ = precision_recall_curve(y_abs, p_best)
 fig, axes = plt.subplots(1, 2, figsize=(13, 5))
@@ -702,6 +731,7 @@ This makes the screening posture explicit rather than an accident of the default
 """)
 
 code(r"""
+# A missed hotspot (FN) is treated as 3x as costly as a false alarm (FP).
 COST_FN, COST_FP = 3, 1
 def metrics_at(yt, p, thr):
     yh = (p >= thr).astype(int)
@@ -710,6 +740,7 @@ def metrics_at(yt, p, thr):
             'recall': recall_score(yt, yh, zero_division=0),
             'f1': f1_score(yt, yh, zero_division=0),
             'cost': COST_FN * fn + COST_FP * fp}
+# Sweep thresholds and pick the one with the lowest expected cost.
 grid = np.linspace(0.05, 0.95, 91)
 sweep = pd.DataFrame([metrics_at(y_abs, p_best, t) for t in grid])
 t_star = float(sweep.loc[sweep['cost'].idxmin(), 'thr'])
@@ -737,6 +768,7 @@ ConfusionMatrixDisplay(confusion_matrix(y_abs, yhat_star),
 plt.title(f'Confusion matrix — working model at threshold {t_star:.2f}')
 plt.tight_layout(); plt.show()
 
+# Inspect the stations the model got wrong at the chosen threshold.
 err = df.copy()
 err['y_true'] = y_abs.to_numpy(); err['y_pred'] = yhat_star; err['p_hotspot'] = p_best
 wrong = err[err['y_true'] != err['y_pred']]
@@ -784,6 +816,7 @@ single number.
 """)
 
 code(r"""
+# Leave-one-city-out: each fold holds out one entire city as the test set.
 gkf = GroupKFold(n_splits=df['city'].nunique())
 rows = []
 for tr, te in gkf.split(X, y_abs, groups):
@@ -795,11 +828,13 @@ for tr, te in gkf.split(X, y_abs, groups):
     est.fit(X.iloc[tr], y_abs.iloc[tr])
     p = est.predict_proba(X.iloc[te])[:, 1]
     yt = y_abs.iloc[te]
+    # AUC is undefined when the held-out city has only one class (no positives).
     auc = roc_auc_score(yt, p) if yt.nunique() > 1 else np.nan
     rows.append({'held_out_city': held, 'n_stations': len(te),
                  'n_positive': int(yt.sum()), 'ROC-AUC': auc})
 transfer = pd.DataFrame(rows).sort_values('n_stations', ascending=False)
 transfer_mean = transfer['ROC-AUC'].mean()
+# 'reliable' = folds with enough positives to give a meaningful score.
 reliable = transfer[transfer['n_positive'] >= 5]
 transfer_mean_reliable = reliable['ROC-AUC'].mean()
 print(transfer.round(3).to_string(index=False))
@@ -834,6 +869,7 @@ A learning curve trains the model on increasing fractions of the data and plots 
 """)
 
 code(r"""
+# Train on growing subsets and score by CV, to see if more stations would help.
 lc_est = make_pipeline(RandomForestClassifier(class_weight='balanced', random_state=RANDOM_STATE,
                                               n_jobs=-1,
                                               **{k.replace('clf__',''):v for k,v in rf.best_params_.items()}),
@@ -882,14 +918,15 @@ and the within-city model is real or could be noise.
 
 code(r"""
 def bootstrap_auc(yt, p, n_boot=2000):
+    # Resample stations with replacement; recompute AUC each time.
     yt = np.asarray(yt); p = np.asarray(p); n = len(yt)
     stats = []
     for _ in range(n_boot):
         idx = rng.integers(0, n, n)
-        if np.unique(yt[idx]).size < 2:
+        if np.unique(yt[idx]).size < 2:   # skip degenerate single-class resamples
             continue
         stats.append(roc_auc_score(yt[idx], p[idx]))
-    lo, hi = np.percentile(stats, [2.5, 97.5])
+    lo, hi = np.percentile(stats, [2.5, 97.5])   # 95% percentile interval
     return np.mean(stats), lo, hi
 
 rows = []
