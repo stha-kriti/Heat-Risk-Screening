@@ -239,6 +239,16 @@ for col in ['is_hotspot_absolute', 'is_local_hotspot']:
     assert 0.20 <= risk[col].mean() <= 0.30, f'{col} rate off'
 """)
 
+md(r"""
+The two labels already tell different stories. The absolute hotspots pile into
+the warmest city. Zurich holds 72 of the roughly 95 absolute hotspots, while
+several cities contribute none. The within-city hotspots instead spread across
+all six cities, from 46 in Zurich down to 3 in Berlin and Amsterdam. This is the
+whole reason we carry both targets. The absolute label mostly records which city
+is warm, while the within-city label captures the local microclimate that a
+planner can actually act on.
+""")
+
 # ---- Section 3.2 ------------------------------------------------------
 md(r"""
 ### 3.2 Station context features
@@ -246,7 +256,9 @@ md(r"""
 A station's heat is driven by where it sits. We attach each station's
 coordinates and sensor height from the metadata tables (normalising ids to NFC
 again so umlaut stations match), then engineer features that describe a
-station's position. All of these come only from geography and metadata, never
+station's position. The sensor height arrives as free text such as '4 m' or
+'2-3 m', so we parse it into a single number and median-impute the few gaps
+inside the pipeline. All of these come only from geography and metadata, never
 from the temperature record, so they cannot leak the answer into the model. The
 city centroid that anchors distance and direction is computed once over all
 stations rather than refit per fold. It uses only coordinates and no
@@ -531,6 +543,16 @@ We expect only modest skill from geography alone, and that expectation is itself
 a finding. The true drivers of microclimate (land cover, building density,
 surface sealing) are not in this dataset. A simple model that we can explain is
 worth more here than a complex one we cannot.
+
+A few choices in the code below set up an honest comparison. We validate with
+stratified five-fold cross-validation, which keeps the share of hotspots roughly
+equal in every fold. We pass `class_weight='balanced'` so the models attend to
+the minority hotspot class without us resampling the data. We tune each model's
+main settings with a small grid search wrapped in its own inner cross-validation,
+so the settings are chosen by the data rather than by hand. We score that search
+with average precision, the precision-recall measure that suits a rare positive
+class better than accuracy. The tuning is done once on the absolute target, and
+the chosen settings are reused for both targets so the comparison stays fair.
 """)
 
 code(r"""
@@ -551,6 +573,13 @@ rf = GridSearchCV(
 logit.fit(X, y_abs); rf.fit(X, y_abs)
 print('LogReg best params:', logit.best_params_)
 print('RF best params:    ', rf.best_params_)
+""")
+
+md(r"""
+The search keeps the logistic model only lightly regularised (C of 10) and the
+forest shallow, with a maximum depth of 5 and 200 trees. A shallow forest fits a
+small dataset like ours without memorising it. These settings are reused for
+every model run that follows.
 """)
 
 # ---- Section 6 (validation) -------------------------------------------
@@ -884,6 +913,11 @@ ax.legend(); plt.tight_layout(); plt.show()
 
 md(r"""
 ### 7.1 What this analysis can and cannot say
+
+The two intervals do not overlap. The absolute model sits at 0.70 with a 95%
+interval of 0.64 to 0.76, while the within-city model sits at 0.53 with an
+interval of 0.46 to 0.59 that still includes the no-skill line of 0.5. So the
+gap between the two is a real difference and not a trick of the sample.
 
 The confidence intervals frame two kinds of uncertainty. **Epistemic** uncertainty
 is the part we could shrink with more or better data: the wide intervals come
