@@ -1,0 +1,17 @@
+# CDAP project — pinned-by-minor-version dependencies
+# Install with: pip install -r requirements.txt
+#
+# Core data/analysis stack used by D1 (and D2/D3 will extend this).
+numpy>=1.26,<3
+pandas>=2.1,<3
+matplotlib>=3.8,<4
+seaborn>=0.13,<1
+pyarrow>=14,<22          # parquet writer for the hourly-data cache
+
+# Notebook runtime
+jupyter>=1.0
+jupyterlab>=4.0
+ipykernel>=6.27
+
+# D2 (modeling) — included now to keep the env stable across deliverables
+scikit-learn>=1.3,<2
