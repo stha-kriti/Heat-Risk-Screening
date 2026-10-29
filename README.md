@@ -1,6 +1,6 @@
-# Computational Data Analysis
+# Heat Risk Screening
 
-This TUM course project uses the FAIRUrbTemp urban air-temperature dataset to explore where summer heat exposure is highest across monitored city stations, and how useful geographic information is for screening local hotspots.
+This TUM Computational Data Analysis course project uses the FAIRUrbTemp urban air-temperature dataset to explore where summer heat exposure is highest across monitored city stations, and how useful geographic information is for screening local hotspots.
 
 The analysis treats heat-risk screening as a descriptive and decision-support task. It is not a forecast, causal analysis, or recommendation for a specific intervention. Station coverage is uneven, and the available data does not include factors such as humidity, wind, or land cover; interpret results with those limits in mind.
 
