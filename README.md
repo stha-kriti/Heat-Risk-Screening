@@ -9,6 +9,7 @@ The analysis treats heat-risk screening as a descriptive and decision-support ta
 - [D1: Problem framing and exploratory data analysis](deliverable_1/d1.ipynb) audits the data and motivates the heat-exposure measures.
 - [D2: Local-hotspot classification](deliverable_2/d2.ipynb) evaluates whether station geography can identify relatively hot locations within a city.
 - [D3: Integrated analysis](deliverable_3/d3.ipynb) brings together absolute and within-city exposure, model validation, uncertainty, and screening implications.
+- [Final presentation (PPTX)](presentation/Heat_Risk_Screening_CDAP_final.pptx) summarises the problem definition, analysis, results and limitations.
 - [Course notebooks](notebooks/) contain supporting exercises and demonstrations on Python, visualization, modeling, and related topics.
 
 Design notes and implementation plans for the deliverables are kept alongside their notebooks.
